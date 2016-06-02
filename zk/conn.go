@@ -277,14 +277,29 @@ func (c *Conn) connect() error {
 		}
 
 		zkConn, err := c.dialer("tcp", c.Server(), c.connectTimeout)
-		if err == nil {
-			c.conn = zkConn
-			c.setState(StateConnected)
-			c.logger.Printf("Connected to %s", c.Server())
-			return nil
+		if err != nil {
+			c.logger.Printf("Failed to connect to %s: %+v", c.Server(), err)
+			continue
 		}
 
-		c.logger.Printf("Failed to connect to %s: %+v", c.Server(), err)
+		// verify we're actually responding
+		// we will receive a special message if zookeeper is "up," but not servicing connections
+		// because of something like leader election
+		// we use our hidden FLW method because the public method attempts to parse it
+		// we want to know if we got the error we were expecting or not.  If we didn't we might need to err!
+		if val, err := fourLetterWord(c.Server(), "stat", time.Second); err != nil {
+			c.logger.Printf("Failed to talk on connection to %s: %+v", c.Server(), err)
+			continue
+		} else if string(val) == "This ZooKeeper instance is not currently serving requests\n" {
+			c.logger.Printf("Failed to connect to %s: %+v", c.Server(), err)
+			time.Sleep(c.reconnectDelay)
+			continue
+		}
+
+		c.conn = zkConn
+		c.setState(StateConnected)
+		c.logger.Printf("Connected to %s", c.Server())
+		return nil
 	}
 }
 
